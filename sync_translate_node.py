@@ -1,11 +1,3 @@
-
-# """
-# Sync.so – video-translation node
-# Requires:
-#   pip install sync openai elevenlabs moviepy requests
-#   (ffmpeg must be on PATH)
-# """
-
 import time
 import uuid
 import tempfile
@@ -26,17 +18,14 @@ from elevenlabs.client import ElevenLabs
 
 @dataclass
 class BabelfishArgs:
-    # required
     sync_api_key: str
     openai_api_key: str
     eleven_api_key: str
     video_url: str
     target_language: str
 
-    # optional
     source_language: str = ""
     output_json_path: str = ""
-
     lipsync_model: str = "lipsync-2"
     tts_model: str = "eleven_multilingual_v2"
     gpt_model: str = "gpt-3.5-turbo"
@@ -45,11 +34,11 @@ class BabelfishArgs:
     sync_mode: str = "bounce"
     segment_start: float = -1
     segment_end: float = -1
-    poll_interval: int = 10
+    poll_interval: int = 10  # hidden from frontend
     tmp_dir: Path = field(default_factory=lambda: Path(tempfile.gettempdir()) / "sync_translate")
 
 
-class SyncTranslateNode:
+class SyncTranslateInputNode:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -59,6 +48,31 @@ class SyncTranslateNode:
                 "sync_api_key": ("STRING", {"default": ""}),
                 "openai_api_key": ("STRING", {"default": ""}),
                 "eleven_api_key": ("STRING", {"default": ""}),
+            }
+        }
+
+    RETURN_TYPES = ("BABELFISH_ARGS",)
+    RETURN_NAMES = ("babelfish_args",)
+    FUNCTION = "package_args"
+    CATEGORY = "Sync.so"
+
+    def package_args(self, video_url, target_language, sync_api_key, openai_api_key, eleven_api_key):
+        args = BabelfishArgs(
+            video_url=video_url,
+            target_language=target_language,
+            sync_api_key=sync_api_key,
+            openai_api_key=openai_api_key,
+            eleven_api_key=eleven_api_key,
+        )
+        return (args,)
+
+
+class SyncTranslateNode:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "babelfish_args": ("BABELFISH_ARGS",),
             },
             "optional": {
                 "source_language": ("STRING", {"default": ""}),
@@ -66,7 +80,6 @@ class SyncTranslateNode:
                 "voice_id": ("STRING", {"default": ""}),
                 "lipsync_model": (["lipsync-2", "lipsync-1.9.0-beta"],),
                 "sync_mode": (["loop", "bounce", "cut_off", "silence", "remap"], {"default": "bounce"}),
-                "poll_interval": ("INT", {"default": 10, "min": 3, "max": 60}),
                 "segment_start": ("FLOAT", {"default": -1}),
                 "segment_end": ("FLOAT", {"default": -1}),
             },
@@ -78,27 +91,23 @@ class SyncTranslateNode:
     CATEGORY = "Sync.so"
     OUTPUT_NODE = True
 
-    def translate_video(self,
-                        video_url, target_language,
-                        sync_api_key, openai_api_key, eleven_api_key,
+    def translate_video(self, babelfish_args,
                         source_language="", output_json_path="",
                         voice_id="", lipsync_model="lipsync-2",
-                        sync_mode="bounce", poll_interval=10,
-                        segment_start=-1, segment_end=-1):
+                        sync_mode="bounce", segment_start=-1, segment_end=-1):
 
-        args = BabelfishArgs(sync_api_key, openai_api_key, eleven_api_key,
-                             video_url, target_language,
-                             source_language=source_language,
-                             output_json_path=output_json_path,
-                             lipsync_model=lipsync_model,
-                             voice_id=voice_id,
-                             sync_mode=sync_mode,
-                             poll_interval=poll_interval,
-                             segment_start=segment_start,
-                             segment_end=segment_end)
+        args = babelfish_args
+        args.source_language = source_language
+        args.output_json_path = output_json_path
+        args.voice_id = voice_id
+        args.lipsync_model = lipsync_model
+        args.sync_mode = sync_mode
+        args.segment_start = segment_start
+        args.segment_end = segment_end
+
         args.tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        local_vid = Path(self._download(video_url, args.tmp_dir))
+        local_vid = Path(self._download(args.video_url, args.tmp_dir))
         extracted_wav = self._extract_audio(local_vid)
         generated_audio_mp3, translated_text = self._tts(args, extracted_wav.name)
 
@@ -109,9 +118,9 @@ class SyncTranslateNode:
         client = Sync(api_key=args.sync_api_key).generations
         try:
             res = client.create(
-                input=[Video(url=video_url, segments_secs=[[args.segment_start, args.segment_end]]),
+                input=[Video(url=args.video_url, segments_secs=[[args.segment_start, args.segment_end]]),
                        Audio(url=aud_url)],
-                model=lipsync_model,
+                model=args.lipsync_model,
                 options=GenerationOptions(sync_mode=args.sync_mode),
             )
         except ApiError as e:
@@ -127,7 +136,15 @@ class SyncTranslateNode:
             return {"ui": {"texts": []}, "result": (f"Lipsync job {job_id} failed: {status}",)}
 
         output_url = client.get(job_id).output_url
-        outfile = args.tmp_dir / f"translated_{uuid.uuid4().hex[:8]}.mp4"
+
+        # Save MP4 next to JSON if specified
+        if args.output_json_path:
+            json_dir = Path(args.output_json_path).parent
+            json_dir.mkdir(parents=True, exist_ok=True)
+            outfile = json_dir / f"translated_{uuid.uuid4().hex[:8]}.mp4"
+        else:
+            outfile = args.tmp_dir / f"translated_{uuid.uuid4().hex[:8]}.mp4"
+
         self._download(output_url, args.tmp_dir, outfile)
 
         if args.output_json_path:
@@ -140,6 +157,7 @@ class SyncTranslateNode:
                 "voice_id": args.voice_id,
                 "lipsync_model": args.lipsync_model,
                 "sync_mode": args.sync_mode,
+                "job_id": job_id,
                 "timestamp": datetime.utcnow().isoformat(),
             }
             with open(args.output_json_path, "w") as f:
@@ -218,6 +236,14 @@ class SyncTranslateNode:
             return None
 
 
-NODE_CLASS_MAPPINGS = {"SyncTranslateNode": SyncTranslateNode}
-NODE_DISPLAY_NAME_MAPPINGS = {"SyncTranslateNode": "Sync.so Translator"}
-print("✅ Sync.so node loaded.")
+NODE_CLASS_MAPPINGS = {
+    "SyncTranslateInputNode": SyncTranslateInputNode,
+    "SyncTranslateNode": SyncTranslateNode,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "SyncTranslateInputNode": "Sync.so Translate – Input",
+    "SyncTranslateNode": "Sync.so Translate – Worker",
+}
+
+print(" Sync.so translation nodes loaded.")

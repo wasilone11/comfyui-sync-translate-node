@@ -1,0 +1,16 @@
+[project]
+name = "sync-translate-node"
+description = ""
+version = "1.0.1"
+license = {file = "LICENSE"}
+dependencies = ["syncsdk==0.1.9", "openai==1.92.0", "httpx==0.27.2"]
+
+[project.urls]
+Repository = "https://github.com/wasilone11/comfyui-sync-translate-node"
+#  Used by Comfy Registry https://registry.comfy.org
+
+[tool.comfy]
+PublisherId = "sync-translate-node"
+DisplayName = "comfyui-sync-translate-node"
+Icon = ""
+includes = []
