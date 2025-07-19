@@ -24,9 +24,9 @@ After cloning [ComfyUI](https://github.com/comfyanonymous/ComfyUI) and setting u
 6. In the ComfyUI interface:  
    - On the left sidebar, go to the **Nodes** tab.  
    - Search for **Sync**.  
-   - Open the **Sync** node and locate the translate node.  
+   - Open the **Sync** node and locate the translate input and translate worker node. Add them to the UI and join them.
    - Click **Run** to generate the output!
-   - The output video link will be saved in the json file
+   - The output video link will be saved in the json file along with the job ID.
 
 ---
 
